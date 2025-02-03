@@ -151,7 +151,7 @@ def generate_topics(
 
 
 def generate_topic_lvl1(
-    api, model, data, prompt_file, seed_file, out_file, topic_file, verbose
+    api, model, data, prompt_file, seed_file, out_file, topic_file, verbose, early_stop
 ):
     """
     Generate high-level topics
@@ -165,6 +165,7 @@ def generate_topic_lvl1(
     - out_file (str): File to write results to
     - topic_file (str): File to write topics to
     - verbose (bool): Whether to print out results
+    - early_stop (int): Modify this parameter to control early stopping
 
     Returns:
     - topics_root (TopicTree): Root node of the topic tree
@@ -212,6 +213,7 @@ def generate_topic_lvl1(
         max_tokens,
         top_p,
         verbose,
+        early_stop=early_stop,
     )
 
     # Save generated topics
@@ -274,6 +276,9 @@ if __name__ == "__main__":
     parser.add_argument(
         "--verbose", type=bool, default=False, help="Whether to print out results"
     )
+    parser.add_argument(
+        "--early_stop", type=int, default=100, help="Modify this parameter to control early stopping"
+    )
     args = parser.parse_args()
     generate_topic_lvl1(
         args.api,
@@ -284,4 +289,5 @@ if __name__ == "__main__":
         args.out_file,
         args.topic_file,
         args.verbose,
+        args.early_stop,
     )
