@@ -185,8 +185,9 @@ def generate_topic_lvl1(
 
     # Model configuration
     context = (
-        128000
-        if model not in ["gpt-3.5-turbo", "gpt-4"]
+        128000 if model.startswith("o1-mini")
+        else 200000 if model.startswith(("o3-mini", "o1"))
+        else 128000 if model not in ["gpt-3.5-turbo", "gpt-4"]
         else (4096 if model == "gpt-3.5-turbo" else 8000)
     )
     context_len = context - max_tokens

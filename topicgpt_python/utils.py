@@ -151,13 +151,21 @@ class APIClient:
         for attempt in range(num_try):
             try:
                 if self.api in ["openai", "azure"]:
-                    completion = self.client.chat.completions.create(
-                        model=self.model,
-                        messages=message,
-                        max_tokens=max_tokens,
-                        temperature=temperature,
-                        top_p=top_p,
-                    )
+                    if self.model.startswith("o3"):
+                        completion = self.client.chat.completions.create(
+                            model=self.model,
+                            messages=message,
+                            max_completion_tokens=max_tokens,
+                            top_p=top_p,
+                        )
+                    else:
+                        completion = self.client.chat.completions.create(
+                            model=self.model,
+                            messages=message,
+                            max_tokens=max_tokens,
+                            temperature=temperature,
+                            top_p=top_p,
+                        )
                     if verbose:
                         print(
                             "Prompt token usage:",
