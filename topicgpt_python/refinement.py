@@ -13,7 +13,7 @@ device = "cuda" if torch.cuda.is_available() else "cpu"
 model = SentenceTransformer("all-MiniLM-L6-v2", device=device)
 
 
-def topic_pairs(topic_sent, all_pairs, threshold=0.5, num_pair=2):
+def topic_pairs(topic_sent, all_pairs, verbose=False, threshold=0.5, num_pair=2):
     """
     Return the most similar topic pairs and the pairs that have been prompted so far.
 
@@ -28,6 +28,8 @@ def topic_pairs(topic_sent, all_pairs, threshold=0.5, num_pair=2):
     - list: List of all pairs prompted so far.
     """
     embeddings = model.encode(topic_sent, convert_to_tensor=True)
+    if verbose:
+        print(f"Calculating cosine similarity between {len(embeddings)} embeddings...")
     cosine_scores = util.cos_sim(embeddings, embeddings).cpu()
 
     pairs = [
@@ -83,7 +85,7 @@ def merge_topics(
     """
     topic_sent = topics_root.to_topic_list(desc=True, count=False)
     new_pairs, all_pairs = topic_pairs(
-        topic_sent, all_pairs=[], threshold=0.5, num_pair=2
+        topic_sent, all_pairs=[], verbose=verbose, threshold=0.5, num_pair=2
     )
     if len(new_pairs) <= 1 and verbose:
         print("No topic pairs to be merged.")
@@ -135,7 +137,7 @@ def merge_topics(
             traceback.print_exc()
 
         new_pairs, all_pairs = topic_pairs(
-            topic_sent, all_pairs, threshold=0.5, num_pair=2
+            topic_sent, all_pairs, verbose=verbose, threshold=0.5, num_pair=2
         )
     return responses, topics_root, orig_new
 
