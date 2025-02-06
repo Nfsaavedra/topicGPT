@@ -7,43 +7,53 @@ import argparse
 from topicgpt_python.utils import *
 from anytree import RenderTree
 from sentence_transformers import SentenceTransformer, util
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from tqdm import tqdm
 
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 device = "cuda" if torch.cuda.is_available() else "cpu"
 model = SentenceTransformer("all-MiniLM-L6-v2", device=device)
-pairs_cache = {}
 
-def topic_pairs(topic_sent, all_pairs, verbose=False, threshold=0.5, num_pair=2):
+
+def gen_topic_pairs(topic_sent, verbose=False):
     """
-    Return the most similar topic pairs and the pairs that have been prompted so far.
+    Return a list of topic pairs based on cosine similarity between topic sentences.
 
     Parameters:
     - topic_sent (list): List of topic sentences.
-    - all_pairs (list): List of all pairs prompted so far.
-    - threshold (float): The threshold for cosine similarity.
-    - num_pair (int): The number of pairs to return.
+    - verbose (bool): If True, prints additional information.
+
+    Returns:
+    - list: list with index and cosine score for each topic pair.
+    """
+    embeddings = model.encode(topic_sent, convert_to_tensor=True)
+    if verbose:
+        print(f"Calculating cosine similarity between {len(embeddings)} embeddings...")
+    cosine_scores = util.cos_sim(embeddings, embeddings).cpu()
+
+    i, j = torch.triu_indices(*cosine_scores.shape, offset=1)
+    i_np = i.numpy()
+    j_np = j.numpy()
+    scores_np = cosine_scores[i_np, j_np].numpy()
+    pairs = [{"index": [i_np[k], j_np[k]], "score": scores_np[k]} for k in range(len(i_np))]
+    return pairs
+
+
+def select_topic_pairs(pairs, all_pairs, topic_sent, threshold=0.5, num_pair=2):
+    """
+    Select pairs of topics based on cosine similarity scores and a threshold.
+    
+    Parameters:
+    - pairs (list): List of topic pairs with cosine similarity scores.
+    - all_pairs (list): List of all previously selected pairs.
+    - topic_sent (list): List of topic sentences.
+    - threshold (float): The threshold for selecting pairs.
+    - num_pair (int): The number of pairs to select.
 
     Returns:
     - list: List of selected topic pairs.
     - list: List of all pairs prompted so far.
     """
-    topic_sent = tuple(topic_sent)
-    if topic_sent not in pairs_cache:
-        embeddings = model.encode(topic_sent, convert_to_tensor=True)
-        if verbose:
-            print(f"Calculating cosine similarity between {len(embeddings)} embeddings...")
-        cosine_scores = util.cos_sim(embeddings, embeddings).cpu()
-
-        i, j = torch.triu_indices(*cosine_scores.shape, offset=1)
-        i_np = i.numpy()
-        j_np = j.numpy()
-        scores_np = cosine_scores[i_np, j_np].numpy()
-        pairs = [{"index": [i_np[k], j_np[k]], "score": scores_np[k]} for k in range(len(i_np))]
-        pairs_cache[topic_sent] = pairs
-    else:
-        if verbose:
-            print("Using cached pairs...")
-        pairs = pairs_cache[topic_sent]
     selected_pairs = []
 
     for pair in pairs:
@@ -69,6 +79,9 @@ def merge_topics(
     max_tokens,
     top_p,
     verbose,
+    n_threads,
+    threshold=0.5,
+    num_pair=5
 ):
     """
     Merge similar topics based on a given refinement prompt and API client settings.
@@ -82,16 +95,21 @@ def merge_topics(
     - max_tokens (int): The maximum number of tokens to generate.
     - top_p (float): The nucleus sampling parameter.
     - verbose (bool): If True, prints each replacement made.
+    - n_threads (int): The number of threads to use for parallel processing.
 
     Returns:
     - list: List of responses from the API.
     - TopicTree: The updated topic root with merged topics.
     - dict: The updated mapping of original topics to new topics.
     """
+    executor = ThreadPoolExecutor(max_workers=n_threads)
     topic_sent = topics_root.to_topic_list(desc=True, count=False)
-    new_pairs, all_pairs = topic_pairs(
-        topic_sent, all_pairs=[], verbose=verbose, threshold=0.5, num_pair=2
+    topic_pairs = gen_topic_pairs(
+        topic_sent, all_pairs=[], verbose=verbose
     )
+    new_pairs, all_pairs = select_topic_pairs(
+        topic_pairs, [], topic_sent, threshold=threshold, num_pair=num_pair
+    )   
     if len(new_pairs) <= 1 and verbose:
         print("No topic pairs to be merged.")
 
@@ -102,18 +120,34 @@ def merge_topics(
     )
     pattern_original = regex.compile(r"\[(\d+)\]([\w\s\-',]+),?")
 
+    futures = []
     while len(new_pairs) > 1:
-        refiner_prompt = refinement_prompt.format(Topics="\n".join(new_pairs))
-        if verbose:
-            print(f"Prompting model to merge topics:\n{refiner_prompt}")
+        def refine_pairs():
+            refiner_prompt = refinement_prompt.format(Topics="\n".join(new_pairs))
+            if verbose:
+                print(f"Prompting model to merge topics:\n{refiner_prompt}")
 
-        try:
             response = api_client.iterative_prompt(
                 refiner_prompt, max_tokens, temperature, top_p
             )
-            responses.append(response)
             merges = response.split("\n")
+            return response, merges
 
+        futures.append(executor.submit(refine_pairs))
+        new_pairs, all_pairs = select_topic_pairs(
+            topic_pairs, all_pairs, topic_sent, threshold=threshold, num_pair=num_pair
+        )
+
+    with tqdm(total=len(futures), desc="Merging topics") as pbar:
+        for future in as_completed(futures):
+            pbar.update(1)
+            try:
+                response, merges = future.result()
+            except Exception as e:
+                print("Error when calling API!")
+                traceback.print_exc()
+
+            responses.append(response)
             for merge in merges:
                 match = pattern_topic.match(merge.strip())
                 if match:
@@ -137,13 +171,7 @@ def merge_topics(
                     for orig in original_topics:
                         orig_new[orig[0]] = name
                     print(f"Updated topic tree with [{lvl}] {name}: {desc}")
-        except Exception as e:
-            print("Error when calling API!")
-            traceback.print_exc()
-
-        new_pairs, all_pairs = topic_pairs(
-            topic_sent, all_pairs, verbose=verbose, threshold=0.5, num_pair=2
-        )
+        
     return responses, topics_root, orig_new
 
 
@@ -248,6 +276,9 @@ def refine_topics(
     verbose,
     remove,
     mapping_file,
+    n_threads=1,
+    threshold=0.5,
+    num_pair=5
 ):
     """
     Main function to refine topics by merging and updating based on API response.
@@ -263,6 +294,9 @@ def refine_topics(
     - verbose (bool): If True, prints each replacement made.
     - remove (bool): If True, removes low-frequency topics.
     - mapping_file (str): Path to save the mapping as a JSON file.
+    - n_threads (int): The number of threads to use for parallel processing.
+    - threshold (float): The threshold for selecting pairs.
+    - num_pair (int): The number of pairs to select.
 
     Returns:
     - None
@@ -294,6 +328,9 @@ def refine_topics(
         max_tokens,
         top_p,
         verbose,
+        n_threads,
+        threshold=threshold,
+        num_pair=num_pair
     )
 
     if mapping_org != mapping and verbose:
@@ -330,6 +367,9 @@ if __name__ == "__main__":
     parser.add_argument(
         "--mapping_file", type=str, default="data/output/refiner_mapping.json"
     )
+    parser.add_argument("--n_threads", type=int, default=1)
+    parser.add_argument("--threshold", type=float, default=0.5)
+    parser.add_argument("--num_pair", type=int, default=5)
 
     args = parser.parse_args()
     refine_topics(
@@ -342,5 +382,8 @@ if __name__ == "__main__":
         args.updated_file,
         args.verbose,
         args.remove,
-        args.mapping_file
+        args.mapping_file,
+        n_threads=args.n_threads,
+        threshold=args.threshold,
+        num_pair=args.num_pair
     )
