@@ -105,7 +105,7 @@ def merge_topics(
     executor = ThreadPoolExecutor(max_workers=n_threads)
     topic_sent = topics_root.to_topic_list(desc=True, count=False)
     topic_pairs = gen_topic_pairs(
-        topic_sent, all_pairs=[], verbose=verbose
+        topic_sent, verbose=verbose
     )
     new_pairs, all_pairs = select_topic_pairs(
         topic_pairs, [], topic_sent, threshold=threshold, num_pair=num_pair
@@ -122,8 +122,8 @@ def merge_topics(
 
     futures = []
     while len(new_pairs) > 1:
-        def refine_pairs():
-            refiner_prompt = refinement_prompt.format(Topics="\n".join(new_pairs))
+        def refine_pairs(new_pairs):
+            refiner_prompt = refinement_prompt.format(Topics="\n".join(set(new_pairs)))
             if verbose:
                 print(f"Prompting model to merge topics:\n{refiner_prompt}")
 
@@ -133,7 +133,7 @@ def merge_topics(
             merges = response.split("\n")
             return response, merges
 
-        futures.append(executor.submit(refine_pairs))
+        futures.append(executor.submit(refine_pairs, new_pairs))
         new_pairs, all_pairs = select_topic_pairs(
             topic_pairs, all_pairs, topic_sent, threshold=threshold, num_pair=num_pair
         )
