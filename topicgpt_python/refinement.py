@@ -11,7 +11,7 @@ from sentence_transformers import SentenceTransformer, util
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 device = "cuda" if torch.cuda.is_available() else "cpu"
 model = SentenceTransformer("all-MiniLM-L6-v2", device=device)
-
+pairs_cache = {}
 
 def topic_pairs(topic_sent, all_pairs, verbose=False, threshold=0.5, num_pair=2):
     """
@@ -27,18 +27,23 @@ def topic_pairs(topic_sent, all_pairs, verbose=False, threshold=0.5, num_pair=2)
     - list: List of selected topic pairs.
     - list: List of all pairs prompted so far.
     """
-    embeddings = model.encode(topic_sent, convert_to_tensor=True)
-    if verbose:
-        print(f"Calculating cosine similarity between {len(embeddings)} embeddings...")
-    cosine_scores = util.cos_sim(embeddings, embeddings).cpu()
+    topic_sent = tuple(topic_sent)
+    if topic_sent not in pairs_cache:
+        embeddings = model.encode(topic_sent, convert_to_tensor=True)
+        if verbose:
+            print(f"Calculating cosine similarity between {len(embeddings)} embeddings...")
+        cosine_scores = util.cos_sim(embeddings, embeddings).cpu()
 
-    pairs = [
-        {"index": [i, j], "score": cosine_scores[i][j].item()}
-        for i in range(len(cosine_scores))
-        for j in range(i + 1, len(cosine_scores))
-    ]
-
-    pairs = sorted(pairs, key=lambda x: x["score"], reverse=True)
+        i, j = torch.triu_indices(*cosine_scores.shape, offset=1)
+        i_np = i.numpy()
+        j_np = j.numpy()
+        scores_np = cosine_scores[i_np, j_np].numpy()
+        pairs = [{"index": [i_np[k], j_np[k]], "score": scores_np[k]} for k in range(len(i_np))]
+        pairs_cache[topic_sent] = pairs
+    else:
+        if verbose:
+            print("Using cached pairs...")
+        pairs = pairs_cache[topic_sent]
     selected_pairs = []
 
     for pair in pairs:
