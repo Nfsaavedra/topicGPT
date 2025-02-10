@@ -616,11 +616,15 @@ class TopicTree:
             else None
         )
 
+        if (
+            merged_topic_node is not None and
+            merged_topic_node.name not in list(map(lambda x: x[0], original_topics))
+        ):
+            total_count += merged_topic_node.count
+
         if merged_topic_node:
-            final_count = total_count
-            if final_count <= total_count:
-                merged_topic_node.count = final_count
-                merged_topic_node.desc = new_topic_desc
+            merged_topic_node.count = total_count
+            merged_topic_node.desc = new_topic_desc
         else:
             if total_count <= sum(node.count for node in nodes_to_merge):
                 merged_topic_node = self._add_node(

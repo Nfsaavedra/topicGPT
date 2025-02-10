@@ -7,7 +7,6 @@ import argparse
 from topicgpt_python.utils import *
 from anytree import RenderTree
 from sentence_transformers import SentenceTransformer, util
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from tqdm import tqdm
 
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
@@ -39,7 +38,7 @@ def gen_topic_pairs(topic_sent, verbose=False):
     return pairs
 
 
-def select_topic_pairs(pairs, all_pairs, topic_sent, threshold=0.5, num_pair=2):
+def select_topic_pairs(pairs, topic_sent, topics_seen, threshold=0.5):
     """
     Select pairs of topics based on cosine similarity scores and a threshold.
     
@@ -52,22 +51,24 @@ def select_topic_pairs(pairs, all_pairs, topic_sent, threshold=0.5, num_pair=2):
 
     Returns:
     - list: List of selected topic pairs.
-    - list: List of all pairs prompted so far.
     """
     selected_pairs = []
+    selected_pairs_set = set(topics_seen)
 
-    for pair in pairs:
-        if len(selected_pairs) >= num_pair:
-            break
-        i, j = pair["index"]
-        if (
-            pair["score"] > threshold
-            and sorted([topic_sent[i], topic_sent[j]]) not in all_pairs
-        ):
-            selected_pairs.append([topic_sent[i], topic_sent[j]])
-            all_pairs.append(sorted([topic_sent[i], topic_sent[j]]))
+    with tqdm(total=len(pairs), desc="Selecting topic pairs") as pbar:
+        for pair in pairs:
+            i, j = pair["index"]
+            pair_tuple = tuple(sorted([topic_sent[i], topic_sent[j]]))
 
-    return [item for sublist in selected_pairs for item in sublist], all_pairs
+            if (
+                pair["score"] > threshold
+                and pair_tuple not in selected_pairs_set
+            ):
+                selected_pairs.append(pair_tuple)
+                selected_pairs_set.add(pair_tuple)
+            pbar.update(1)
+
+    return selected_pairs
 
 
 def merge_topics(
@@ -79,7 +80,6 @@ def merge_topics(
     max_tokens,
     top_p,
     verbose,
-    n_threads,
     threshold=0.5,
     num_pair=5
 ):
@@ -95,20 +95,18 @@ def merge_topics(
     - max_tokens (int): The maximum number of tokens to generate.
     - top_p (float): The nucleus sampling parameter.
     - verbose (bool): If True, prints each replacement made.
-    - n_threads (int): The number of threads to use for parallel processing.
 
     Returns:
     - list: List of responses from the API.
     - TopicTree: The updated topic root with merged topics.
     - dict: The updated mapping of original topics to new topics.
     """
-    executor = ThreadPoolExecutor(max_workers=n_threads)
     topic_sent = topics_root.to_topic_list(desc=True, count=False)
     topic_pairs = gen_topic_pairs(
         topic_sent, verbose=verbose
     )
-    new_pairs, all_pairs = select_topic_pairs(
-        topic_pairs, [], topic_sent, threshold=threshold, num_pair=num_pair
+    new_pairs = select_topic_pairs(
+        topic_pairs, topic_sent, [], threshold=threshold
     )   
     if len(new_pairs) <= 1 and verbose:
         print("No topic pairs to be merged.")
@@ -119,11 +117,18 @@ def merge_topics(
         r"^\[(\d+)\]([\w\s\-',]+)[^:]*:([\w\s,\.\-\/;']+) \(([^)]+)\)$"
     )
     pattern_original = regex.compile(r"\[(\d+)\]([\w\s\-',]+),?")
+    merged_list = []
+    topics_seen = set()
 
-    futures = []
     while len(new_pairs) > 1:
-        def refine_pairs(new_pairs):
-            refiner_prompt = refinement_prompt.format(Topics="\n".join(set(new_pairs)))
+        try:
+            topics_seen.update(new_pairs[:num_pair])
+            pairs = set()
+            for pair in new_pairs[:num_pair]:
+                pairs.update(pair)
+            new_pairs = new_pairs[num_pair:]
+            
+            refiner_prompt = refinement_prompt.format(Topics="\n".join(pairs))
             if verbose:
                 print(f"Prompting model to merge topics:\n{refiner_prompt}")
 
@@ -131,23 +136,9 @@ def merge_topics(
                 refiner_prompt, max_tokens, temperature, top_p
             )
             merges = response.split("\n")
-            return response, merges
-
-        futures.append(executor.submit(refine_pairs, new_pairs))
-        new_pairs, all_pairs = select_topic_pairs(
-            topic_pairs, all_pairs, topic_sent, threshold=threshold, num_pair=num_pair
-        )
-
-    with tqdm(total=len(futures), desc="Merging topics") as pbar:
-        for future in as_completed(futures):
-            pbar.update(1)
-            try:
-                response, merges = future.result()
-            except Exception as e:
-                print("Error when calling API!")
-                traceback.print_exc()
 
             responses.append(response)
+            update = False
             for merge in merges:
                 match = pattern_topic.match(merge.strip())
                 if match:
@@ -167,15 +158,37 @@ def merge_topics(
                     original_topics = [
                         (orig_topics[i], orig_lvl[i]) for i in range(len(orig_topics))
                     ]
+                    # Avoid merging a topic to itself
+                    if len(original_topics) == 1 and original_topics[0][0] == name:
+                        continue
+                    # Avoids loops
+                    if (original_topics, name) in merged_list:
+                        continue
+                    merged_list.append((original_topics, name))
                     topics_root = topics_root.update_tree(original_topics, name, desc)
                     for orig in original_topics:
                         orig_new[orig[0]] = name
-                    print(f"Updated topic tree with [{lvl}] {name}: {desc}")
+                    update = True
+                    print(f"Updated topic tree with [{lvl}] {name}: {desc}. Original topics: {original_topics}")
+
+            if update:
+                topic_sent = topics_root.to_topic_list(desc=True, count=False)
+                if verbose:
+                    print("Number of topics:", len(topic_sent))
+                topic_pairs = gen_topic_pairs(
+                    topic_sent, verbose=verbose
+                )
+                new_pairs = select_topic_pairs(
+                    topic_pairs, topic_sent, topics_seen, threshold=threshold
+                )
+        except Exception as e:
+            print("Error when calling API!")
+            traceback.print_exc()
         
     return responses, topics_root, orig_new
 
 
-def remove_topics(topics_root, verbose, threshold=0.01):
+def remove_topics(topics_root, verbose, threshold=0.01, threshold_count=None):
     """
     Remove low-frequency topics from topic tree.
 
@@ -188,7 +201,7 @@ def remove_topics(topics_root, verbose, threshold=0.01):
     - TopicTree: The updated topic root with low-frequency topics removed.
     """
     total_count = sum(node.count for node in topics_root.root.children)
-    threshold_count = total_count * threshold
+    threshold_count = total_count * threshold if threshold_count is None else threshold_count
     removed = False
 
     for node in topics_root.root.children:
@@ -276,9 +289,9 @@ def refine_topics(
     verbose,
     remove,
     mapping_file,
-    n_threads=1,
     threshold=0.5,
-    num_pair=5
+    num_pair=5,
+    remove_threshold_count=None,
 ):
     """
     Main function to refine topics by merging and updating based on API response.
@@ -294,9 +307,9 @@ def refine_topics(
     - verbose (bool): If True, prints each replacement made.
     - remove (bool): If True, removes low-frequency topics.
     - mapping_file (str): Path to save the mapping as a JSON file.
-    - n_threads (int): The number of threads to use for parallel processing.
     - threshold (float): The threshold for selecting pairs.
     - num_pair (int): The number of pairs to select.
+    - remove_threshold_count (int): The threshold count for removing low-frequency topics.
 
     Returns:
     - None
@@ -328,7 +341,6 @@ def refine_topics(
         max_tokens,
         top_p,
         verbose,
-        n_threads,
         threshold=threshold,
         num_pair=num_pair
     )
@@ -337,7 +349,9 @@ def refine_topics(
         print("Mapping updated:", mapping)
 
     if remove:
-        updated_topics_root = remove_topics(updated_topics_root, verbose)
+        updated_topics_root = remove_topics(
+            updated_topics_root, verbose, threshold_count=remove_threshold_count
+        )
 
     update_generation_file(
         generation_file, updated_file, mapping, verbose, mapping_file
@@ -367,9 +381,9 @@ if __name__ == "__main__":
     parser.add_argument(
         "--mapping_file", type=str, default="data/output/refiner_mapping.json"
     )
-    parser.add_argument("--n_threads", type=int, default=1)
     parser.add_argument("--threshold", type=float, default=0.5)
     parser.add_argument("--num_pair", type=int, default=5)
+    parser.add_argument("--remove_threshold_count", type=int, default=None)
 
     args = parser.parse_args()
     refine_topics(
@@ -383,7 +397,7 @@ if __name__ == "__main__":
         args.verbose,
         args.remove,
         args.mapping_file,
-        n_threads=args.n_threads,
         threshold=args.threshold,
-        num_pair=args.num_pair
+        num_pair=args.num_pair,
+        remove_threshold_count=args.remove_threshold_count,
     )
