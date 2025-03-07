@@ -261,8 +261,7 @@ def correct_topics(
                 # Return only the processed rows
                 return {i: chunk_df.at[i, 'responses'] for i in idx_chunk}
             
-            # Split the indices into chunks for parallel processing
-            chunk_size = max(1, len(reprompt_idx) // num_threads)
+            chunk_size = 200
             chunks = [reprompt_idx[i:i + chunk_size] for i in range(0, len(reprompt_idx), chunk_size)]
             
             # Process chunks in parallel

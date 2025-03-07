@@ -209,8 +209,8 @@ def assignment_parallel(
     - res: list of responses
     - prompted_docs: list of processed documents
     """
-    # Determine batch size based on number of documents and workers
-    batch_size = max(1, len(docs) // num_workers)
+    # Use a fixed batch size of 200 independent of the number of workers
+    batch_size = 200
     batches = []
     
     # Create batches of documents
