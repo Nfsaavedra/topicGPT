@@ -6,6 +6,7 @@ from sentence_transformers import SentenceTransformer, util
 import regex as re
 import os
 from topicgpt_python.utils import *
+import concurrent.futures
 
 
 # Disable parallel tokenizers to avoid warnings
@@ -184,7 +185,7 @@ def correct_batch(
 
 
 def correct_topics(
-    api, model, data_path, prompt_path, topic_path, output_path, verbose=False
+    api, model, data_path, prompt_path, topic_path, output_path, verbose=False, num_threads=1
 ):
     """
     Main function to parse, correct, and save topic assignments.
@@ -197,13 +198,15 @@ def correct_topics(
     - topic_path: Path to topic file
     - output_path: Path to save corrected output
     - verbose: Print verbose output
+    - num_threads: Number of threads to use for parallel processing
     """
     api_client = APIClient(api=api, model=model)
     max_tokens, temperature, top_p = 1000, 0.6, 0.9
     context_len = (
-        128000
-        if model not in ["gpt-3.5-turbo", "gpt-4"]
-        else (4096 if model == "gpt-3.5-turbo" else 8000) - max_tokens
+        128000 if model.startswith("o1-mini")
+        else 200000 if model.startswith(("o3-mini", "o1"))
+        else 128000 if model not in ["gpt-3.5-turbo", "gpt-4"]
+        else (4096 if model == "gpt-3.5-turbo" else 8000)
     )
 
     if verbose:
@@ -214,6 +217,7 @@ def correct_topics(
         print(f"Prompt file: {prompt_path}")
         print(f"Output file: {output_path}")
         print(f"Topic file: {topic_path}")
+        print(f"Number of threads: {num_threads}")
         print("-------------------")
 
     df = pd.read_json(data_path, lines=True)
@@ -234,18 +238,47 @@ def correct_topics(
                 reprompt_idx,
                 temperature=temperature,
                 top_p=top_p,
+                max_tokens=max_tokens,
                 verbose=verbose,
             )
         else:
-            df = correct(
-                api_client,
-                topics_root,
-                df,
-                correction_prompt,
-                context_len,
-                reprompt_idx,
-                verbose=verbose,
-            )
+            # Parallelize the correction process
+            def process_chunk(idx_chunk):
+                # Create a copy of the dataframe for this thread
+                chunk_df = df.copy()
+                chunk_df = correct(
+                    api_client,
+                    topics_root,
+                    chunk_df,
+                    correction_prompt,
+                    context_len,
+                    idx_chunk,
+                    temperature=temperature,
+                    top_p=top_p,
+                    max_tokens=max_tokens,
+                    verbose=verbose,
+                )
+                # Return only the processed rows
+                return {i: chunk_df.at[i, 'responses'] for i in idx_chunk}
+            
+            # Split the indices into chunks for parallel processing
+            chunk_size = max(1, len(reprompt_idx) // num_threads)
+            chunks = [reprompt_idx[i:i + chunk_size] for i in range(0, len(reprompt_idx), chunk_size)]
+            
+            # Process chunks in parallel
+            results = {}
+            with concurrent.futures.ThreadPoolExecutor(max_workers=num_threads) as executor:
+                future_to_chunk = {executor.submit(process_chunk, chunk): chunk for chunk in chunks}
+                for future in tqdm(concurrent.futures.as_completed(future_to_chunk), 
+                                  total=len(chunks), 
+                                  desc="Processing chunks"):
+                    chunk_results = future.result()
+                    results.update(chunk_results)
+            
+            # Update the original dataframe with results
+            for idx, response in results.items():
+                df.at[idx, 'responses'] = response
+                
         df.to_json(output_path, lines=True, orient="records")
         error, hallucinated = topic_parser(topics_root, df, verbose)
         if error or hallucinated:
@@ -295,6 +328,7 @@ if __name__ == "__main__":
         help="Path to save corrected output",
     )
     parser.add_argument("--verbose", action="store_true", help="Enable verbose output")
+    parser.add_argument("--num_threads", type=int, default=4, help="Number of threads to use for parallel processing")
     args = parser.parse_args()
 
     correct_topics(
@@ -305,4 +339,5 @@ if __name__ == "__main__":
         args.topic_path,
         args.output_path,
         args.verbose,
+        args.num_threads,
     )
