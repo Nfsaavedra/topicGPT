@@ -151,7 +151,17 @@ def generate_topics(
 
 
 def generate_topic_lvl1(
-    api, model, data, prompt_file, seed_file, out_file, topic_file, verbose
+    api, 
+    model, 
+    data, 
+    prompt_file, 
+    seed_file, 
+    out_file, 
+    topic_file, 
+    verbose, 
+    max_tokens=1000, 
+    temperature=0.0, 
+    top_p=1.0
 ):
     """
     Generate high-level topics
@@ -165,12 +175,14 @@ def generate_topic_lvl1(
     - out_file (str): File to write results to
     - topic_file (str): File to write topics to
     - verbose (bool): Whether to print out results
+    - max_tokens (int): Maximum number of tokens to generate (default: 1000)
+    - temperature (float): Sampling temperature (default: 0.0)
+    - top_p (float): Top-p sampling threshold (default: 1.0)
 
     Returns:
     - topics_root (TopicTree): Root node of the topic tree
     """
     api_client = APIClient(api=api, model=model)
-    max_tokens, temperature, top_p = 1000, 0.0, 1.0
 
     if verbose:
         print("-------------------")
@@ -273,6 +285,15 @@ if __name__ == "__main__":
     parser.add_argument(
         "--verbose", type=bool, default=False, help="Whether to print out results"
     )
+    parser.add_argument(
+        "--max_tokens", type=int, default=1000, help="Maximum number of tokens to generate"
+    )
+    parser.add_argument(
+        "--temperature", type=float, default=0.0, help="Sampling temperature"
+    )
+    parser.add_argument(
+        "--top_p", type=float, default=1.0, help="Top-p sampling threshold"
+    )
     args = parser.parse_args()
     generate_topic_lvl1(
         args.api,
@@ -283,4 +304,7 @@ if __name__ == "__main__":
         args.out_file,
         args.topic_file,
         args.verbose,
+        args.max_tokens,
+        args.temperature,
+        args.top_p,
     )

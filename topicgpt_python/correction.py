@@ -183,7 +183,16 @@ def correct_batch(
 
 
 def correct_topics(
-    api, model, data_path, prompt_path, topic_path, output_path, verbose=False
+    api, 
+    model, 
+    data_path, 
+    prompt_path, 
+    topic_path, 
+    output_path, 
+    verbose=False, 
+    max_tokens=1000, 
+    temperature=0.6, 
+    top_p=0.9
 ):
     """
     Main function to parse, correct, and save topic assignments.
@@ -196,9 +205,11 @@ def correct_topics(
     - topic_path: Path to topic file
     - output_path: Path to save corrected output
     - verbose: Print verbose output
+    - max_tokens (int): Maximum number of tokens to generate (default: 1000)
+    - temperature (float): Sampling temperature (default: 0.6)
+    - top_p (float): Top-p sampling threshold (default: 0.9)
     """
     api_client = APIClient(api=api, model=model)
-    max_tokens, temperature, top_p = 1000, 0.6, 0.9
     context_len = (
         128000
         if model not in ["gpt-3.5-turbo", "gpt-4"]
@@ -294,6 +305,15 @@ if __name__ == "__main__":
         help="Path to save corrected output",
     )
     parser.add_argument("--verbose", action="store_true", help="Enable verbose output")
+    parser.add_argument(
+        "--max_tokens", type=int, default=1000, help="Maximum number of tokens to generate"
+    )
+    parser.add_argument(
+        "--temperature", type=float, default=0.6, help="Sampling temperature"
+    )
+    parser.add_argument(
+        "--top_p", type=float, default=0.9, help="Top-p sampling threshold"
+    )
     args = parser.parse_args()
 
     correct_topics(
@@ -304,4 +324,7 @@ if __name__ == "__main__":
         args.topic_path,
         args.output_path,
         args.verbose,
+        args.max_tokens,
+        args.temperature,
+        args.top_p,
     )
