@@ -91,9 +91,9 @@ def merge_topics(
     responses, orig_new = [], mapping
 
     pattern_topic = regex.compile(
-        r"^\[(\d+)\]([\w\s\-',]+)[^:]*:([\w\s,\.\-\/;']+) \(([^)]+)\)$"
+        r"^\[(\d+)\]([\w\s\-',-_\+]+)[^:]*:([\w\s,\.\-\/;']+) \(([^)]+)\)$"
     )
-    pattern_original = regex.compile(r"\[(\d+)\]([\w\s\-',]+),?")
+    pattern_original = regex.compile(r"\[(\d+)\]([\w\s\-',_\+]+),?")
 
     while len(new_pairs) > 1:
         refiner_prompt = refinement_prompt.format(Topics="\n".join(new_pairs))

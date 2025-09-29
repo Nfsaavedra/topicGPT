@@ -93,7 +93,7 @@ def generate_topics(
     """
     responses = []
     running_dups = 0
-    topic_format = regex.compile(r"^\[(\d+)\] ([\w\s]+):(.+)")
+    topic_format = regex.compile(r"^\[(\d+)\] ([\w\s\+_-]+):(.+)")
 
     for i, doc in enumerate(tqdm(docs)):
         prompt = prompt_formatting(
