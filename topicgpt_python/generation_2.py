@@ -48,7 +48,7 @@ def parse_document_topics(df, topics_list):
 
     Returns: List of topics for each document
     """
-    pattern = regex.compile(r"^\[(\d+)\] ([\w\s\+-_]+):(.+)")
+    pattern = regex.compile(r"^\[(\d+)\] ([\w\s\+-_#]+):(.+)")
     all_topics = []
 
     responses = (
