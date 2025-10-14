@@ -93,7 +93,7 @@ def generate_topics(
     """
     responses = []
     running_dups = 0
-    topic_format = regex.compile(r"^\[(\d+)\] ([\w\s\+_#-]+):(.+)")
+    topic_format = regex.compile(r"^\[(\d+)\] ([\w\s]+):(.+)")
 
     for i, doc in enumerate(tqdm(docs)):
         prompt = prompt_formatting(
@@ -151,17 +151,7 @@ def generate_topics(
 
 
 def generate_topic_lvl1(
-    api, 
-    model, 
-    data, 
-    prompt_file, 
-    seed_file, 
-    out_file, 
-    topic_file, 
-    verbose, 
-    max_tokens=1000, 
-    temperature=0.0, 
-    top_p=1.0
+    api, model, data, prompt_file, seed_file, out_file, topic_file, verbose, early_stop
 ):
     """
     Generate high-level topics
@@ -175,14 +165,13 @@ def generate_topic_lvl1(
     - out_file (str): File to write results to
     - topic_file (str): File to write topics to
     - verbose (bool): Whether to print out results
-    - max_tokens (int): Maximum number of tokens to generate (default: 1000)
-    - temperature (float): Sampling temperature (default: 0.0)
-    - top_p (float): Top-p sampling threshold (default: 1.0)
+    - early_stop (int): Modify this parameter to control early stopping
 
     Returns:
     - topics_root (TopicTree): Root node of the topic tree
     """
     api_client = APIClient(api=api, model=model)
+    max_tokens, temperature, top_p = 1000, 0.0, 1.0
 
     if verbose:
         print("-------------------")
@@ -197,8 +186,9 @@ def generate_topic_lvl1(
 
     # Model configuration
     context = (
-        128000
-        if model not in ["gpt-3.5-turbo", "gpt-4"]
+        128000 if model.startswith("o1-mini")
+        else 200000 if model.startswith(("o3-mini", "o1"))
+        else 128000 if model not in ["gpt-3.5-turbo", "gpt-4"]
         else (4096 if model == "gpt-3.5-turbo" else 8000)
     )
     context_len = context - max_tokens
@@ -223,6 +213,7 @@ def generate_topic_lvl1(
         max_tokens,
         top_p,
         verbose,
+        early_stop=early_stop,
     )
 
     # Save generated topics
@@ -286,13 +277,7 @@ if __name__ == "__main__":
         "--verbose", type=bool, default=False, help="Whether to print out results"
     )
     parser.add_argument(
-        "--max_tokens", type=int, default=1000, help="Maximum number of tokens to generate"
-    )
-    parser.add_argument(
-        "--temperature", type=float, default=0.0, help="Sampling temperature"
-    )
-    parser.add_argument(
-        "--top_p", type=float, default=1.0, help="Top-p sampling threshold"
+        "--early_stop", type=int, default=100, help="Modify this parameter to control early stopping"
     )
     args = parser.parse_args()
     generate_topic_lvl1(
@@ -304,7 +289,5 @@ if __name__ == "__main__":
         args.out_file,
         args.topic_file,
         args.verbose,
-        args.max_tokens,
-        args.temperature,
-        args.top_p,
+        args.early_stop,
     )

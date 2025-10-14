@@ -41,7 +41,7 @@ class APIClient:
     - batch_prompt: Batch prompting for vLLM API
     """
 
-    def __init__(self, api, model, host=None):
+    def __init__(self, api, model):
         self.api = api
         self.model = model
         self.client = None
@@ -56,11 +56,6 @@ class APIClient:
             )
             if model.startswith("gemini"): 
                 self.model_obj = genai.GenerativeModel(self.model)
-        elif api == "ollama": 
-            self.client = OpenAI(
-                base_url = 'http://localhost:11434/v1',
-                api_key='ollama', # required, but unused
-            )
         elif api == "vllm":
             self.hf_token = os.environ.get("HF_TOKEN")
             self.llm = LLM(
@@ -155,21 +150,22 @@ class APIClient:
 
         for attempt in range(num_try):
             try:
-                if self.api in ["openai", "azure", "ollama"]:
-                    completion_params = {
-                        "model": self.model,
-                        "messages": message,
-                        "temperature": temperature,
-                        "top_p": top_p,
-                    }
-                    completion_params[
-                        "max_completion_tokens" if self.api == "openai" else "max_tokens"
-                    ] = max_tokens
-                    
-                    completion = self.client.chat.completions.create(
-                        **completion_params
-                    )
-                        
+                if self.api in ["openai", "azure"]:
+                    if self.model.startswith("o3"):
+                        completion = self.client.chat.completions.create(
+                            model=self.model,
+                            messages=message,
+                            max_completion_tokens=max_tokens,
+                            top_p=top_p,
+                        )
+                    else:
+                        completion = self.client.chat.completions.create(
+                            model=self.model,
+                            messages=message,
+                            max_tokens=max_tokens,
+                            temperature=temperature,
+                            top_p=top_p,
+                        )
                     if verbose:
                         print(
                             "Prompt token usage:",
@@ -620,11 +616,15 @@ class TopicTree:
             else None
         )
 
+        if (
+            merged_topic_node is not None and
+            merged_topic_node.name not in list(map(lambda x: x[0], original_topics))
+        ):
+            total_count += merged_topic_node.count
+
         if merged_topic_node:
-            final_count = total_count
-            if final_count <= total_count:
-                merged_topic_node.count = final_count
-                merged_topic_node.desc = new_topic_desc
+            merged_topic_node.count = total_count
+            merged_topic_node.desc = new_topic_desc
         else:
             if total_count <= sum(node.count for node in nodes_to_merge):
                 merged_topic_node = self._add_node(
