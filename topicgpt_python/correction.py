@@ -28,12 +28,11 @@ def topic_parser(root_topics, df, verbose=False):
     """
     error, hallucinated = [], []
     valid_topics = set(root_topics.get_root_descendants_name())
-    topic_pattern = re.compile(r"\[\d\] [\w\s\-'\&]+")
-    strip_pattern = re.compile(r"^[^a-zA-Z]+|[^a-zA-Z]+$")
+    topic_pattern = re.compile(r"^\[\d+\] ([\w\s\-'\&]+):", re.MULTILINE)
 
     for i, response in enumerate(df.responses.tolist()):
         extracted_topics = [
-            re.sub(strip_pattern, "", topic)
+            topic.strip()
             for topic in re.findall(topic_pattern, response)
         ]
 
@@ -72,13 +71,14 @@ def correct(
 
     for i in tqdm(reprompt_idx, desc="Correcting topics"):
         doc = df.at[i, "prompted_docs"]
+        current_topics = all_topics
         if (
-            api_client.estimate_token_count(doc + correction_prompt + all_topics)
+            api_client.estimate_token_count(doc + correction_prompt + current_topics)
             > context_len
         ):
             topic_embeddings = {
                 topic: sbert.encode(topic, convert_to_tensor=True)
-                for topic in all_topics.split("\n")
+                for topic in current_topics.split("\n")
             }
             doc_embedding = sbert.encode(doc, convert_to_tensor=True)
             top_topics = sorted(
@@ -93,10 +93,10 @@ def correct(
                 and len(top_topics) > 50
             ):
                 top_topics.pop()
-            all_topics = "\n".join(top_topics)
+            current_topics = "\n".join(top_topics)
 
             max_doc_len = context_len - api_client.estimate_token_count(
-                correction_prompt + all_topics
+                correction_prompt + current_topics
             )
             if api_client.estimate_token_count(doc) > max_doc_len:
                 doc = api_client.truncate(doc, max_doc_len)
@@ -104,7 +104,7 @@ def correct(
         try:
             msg = f"Previously, this document was assigned to: {df.at[i, 'responses']}. Please reassign it to an existing topic in the hierarchy."
             prompt = correction_prompt.format(
-                Document=doc, tree=all_topics, Message=msg
+                Document=doc, tree=current_topics, Message=msg
             )
             result = api_client.iterative_prompt(
                 prompt, max_tokens=max_tokens, temperature=temperature, top_p=top_p
@@ -138,13 +138,14 @@ def correct_batch(
 
     for i in tqdm(reprompt_idx, desc="Correcting topics"):
         doc = df.at[i, "prompted_docs"]
+        current_topics = all_topics
         if (
-            api_client.estimate_token_count(doc + correction_prompt + all_topics)
+            api_client.estimate_token_count(doc + correction_prompt + current_topics)
             > context_len
         ):
             topic_embeddings = {
                 topic: sbert.encode(topic, convert_to_tensor=True)
-                for topic in all_topics.split("\n")
+                for topic in current_topics.split("\n")
             }
             doc_embedding = sbert.encode(doc, convert_to_tensor=True)
             top_topics = sorted(
@@ -159,15 +160,15 @@ def correct_batch(
                 and len(top_topics) > 50
             ):
                 top_topics.pop()
-            all_topics = "\n".join(top_topics)
+            current_topics = "\n".join(top_topics)
 
             max_doc_len = context_len - api_client.estimate_token_count(
-                correction_prompt + all_topics
+                correction_prompt + current_topics
             )
             if api_client.estimate_token_count(doc) > max_doc_len:
                 doc = api_client.truncate(doc, max_doc_len)
         msg = f"Previously, this document was assigned to: {df.at[i, 'responses']}. Please reassign it to an existing topic in the hierarchy."
-        prompt = correction_prompt.format(Document=doc, tree=all_topics, Message=msg)
+        prompt = correction_prompt.format(Document=doc, tree=current_topics, Message=msg)
         prompts.append(prompt)
 
     responses = api_client.batch_prompt(
@@ -244,6 +245,7 @@ def correct_topics(
                 reprompt_idx,
                 temperature=temperature,
                 top_p=top_p,
+                max_tokens=max_tokens,
                 verbose=verbose,
             )
         else:
@@ -255,6 +257,7 @@ def correct_topics(
                 context_len,
                 reprompt_idx,
                 verbose=verbose,
+                max_tokens=max_tokens,
             )
         df.to_json(output_path, lines=True, orient="records")
         error, hallucinated = topic_parser(topics_root, df, verbose)
