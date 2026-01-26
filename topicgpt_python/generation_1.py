@@ -161,7 +161,8 @@ def generate_topic_lvl1(
     verbose, 
     max_tokens=1000, 
     temperature=0.0, 
-    top_p=1.0
+    top_p=1.0,
+    early_stop=1000
 ):
     """
     Generate high-level topics
@@ -223,6 +224,7 @@ def generate_topic_lvl1(
         max_tokens,
         top_p,
         verbose,
+        early_stop=early_stop
     )
 
     # Save generated topics
